@@ -14,7 +14,7 @@
     },
     {
         "domain": ".facebook.com",
-        "expirationDate": 1789641091.387713,
+        "expirationDate": 1789656438.740915,
         "hostOnly": false,
         "httpOnly": true,
         "name": "fr",
@@ -23,11 +23,11 @@
         "secure": true,
         "session": false,
         "storeId": null,
-        "value": "1WcSF3bhSRq4L996W.AWeU0NMgjLFjWNxmPJjAR1txLbOBU_r8mqXtexn2-xybGig6Ev8.BqNRqD..AAA.0.0.BqNRqD.AWeVr3IO_K0i0zJpyoLtsiN8izI"
+        "value": "1HHXO3Az3aF5XRKYp.AWf-1T6FsZZZbM32fwjFNqYZqkDr60_UDZopS61IhYgKaHdGfsw.BqNVV_..AAA.0.0.BqNVZ2.AWeh1BW5BOxSaDQ7oCVDS1wO6vI"
     },
     {
         "domain": ".facebook.com",
-        "expirationDate": 1813401091.387748,
+        "expirationDate": 1813416191.700083,
         "hostOnly": false,
         "httpOnly": true,
         "name": "xs",
@@ -36,11 +36,11 @@
         "secure": true,
         "session": false,
         "storeId": null,
-        "value": "36%3ATRqmkaXLsrQ0ng%3A2%3A1781865087%3A-1%3A-1%3A%3AAczSkUCbL6YmF26E67V2TQ5d7mAdWdoh0hPM3Vb_AQ"
+        "value": "47%3AgImK437wd2ABug%3A2%3A1781880188%3A-1%3A-1%3A%3AAcyDi9hXS_W1AzM74Zx_DMxWnHvGBX27Ezw_RovSEA"
     },
     {
         "domain": ".facebook.com",
-        "expirationDate": 1813401091.387609,
+        "expirationDate": 1813416191.699881,
         "hostOnly": false,
         "httpOnly": false,
         "name": "c_user",
@@ -61,11 +61,11 @@
         "secure": true,
         "session": true,
         "storeId": null,
-        "value": "C%7B%22t3%22%3A%5B%5D%2C%22utc3%22%3A1781865093888%2C%22v%22%3A1%7D"
+        "value": "C%7B%22t3%22%3A%5B%5D%2C%22utc3%22%3A1781880441688%2C%22v%22%3A1%7D"
     },
     {
         "domain": ".facebook.com",
-        "expirationDate": 1816425090.204725,
+        "expirationDate": 1816440190.081256,
         "hostOnly": false,
         "httpOnly": true,
         "name": "sb",
@@ -78,7 +78,7 @@
     },
     {
         "domain": ".facebook.com",
-        "expirationDate": 1782469893,
+        "expirationDate": 1782485241,
         "hostOnly": false,
         "httpOnly": false,
         "name": "wd",
