@@ -1,0 +1,7 @@
+{
+  "phases": {
+    "install": {
+      "cmds": ["pnpm i --no-frozen-lockfile"]
+    }
+  }
+}
