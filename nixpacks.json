@@ -1,7 +1,11 @@
 {
+  "providers": ["python"],
   "phases": {
     "install": {
-      "cmds": ["pnpm i --no-frozen-lockfile"]
+      "cmds": ["pip install -r messenger-bot/requirements.txt"]
     }
+  },
+  "start": {
+    "cmd": "python messenger-bot/bot.py"
   }
 }
