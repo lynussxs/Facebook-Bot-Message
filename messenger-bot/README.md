@@ -4,49 +4,87 @@ Bot tự động forward tin nhắn từ một nhóm Messenger sang kênh Discor
 
 ## Cách hoạt động
 
-1. Bot đăng nhập vào tài khoản Facebook bằng email + password.
-2. Lắng nghe (long-polling) toàn bộ tin nhắn đến.
-3. Chỉ xử lý tin nhắn từ `FB_THREAD_ID` được chỉ định.
+1. Bot đọc Facebook session từ file cookies (`fb_cookies.json`).
+2. Kết nối MQTT real-time của Facebook để nhận tin nhắn.
+3. Chỉ xử lý tin nhắn từ `FB_THREAD_ID` chỉ định.
 4. Bỏ qua tin nhắn của chính bot.
 5. Forward sang Discord dưới dạng embed đẹp (tên người gửi + thời gian + nội dung).
-6. Tự động reconnect nếu mất kết nối (exponential backoff, tối đa 5 phút).
+6. Tự động reconnect nếu mất kết nối.
 
-## Cài đặt biến môi trường
+---
 
-Điền vào **Replit Secrets** (hoặc file `.env` nếu chạy local):
+## BƯỚC 1 — Export cookies Facebook (BẮT BUỘC)
 
-| Biến             | Mô tả                                                  |
-|------------------|--------------------------------------------------------|
-| `FB_EMAIL`       | Email tài khoản Facebook bot                           |
-| `FB_PASSWORD`    | Mật khẩu tài khoản Facebook bot                        |
-| `DISCORD_WEBHOOK`| URL Webhook của kênh Discord nhận tin                  |
-| `FB_THREAD_ID`   | ID nhóm chat Messenger (xem hướng dẫn bên dưới)        |
+Bot dùng cookies thay vì email/password để tránh bị checkpoint.
 
-### Cách lấy `FB_THREAD_ID`
+### Cách lấy cookies:
 
+1. Cài extension **"EditThisCookie"** hoặc **"Cookie-Editor"** trên Chrome/Firefox.
+2. Mở `https://www.facebook.com` → đăng nhập bằng tài khoản bot.
+3. Mở extension → **Export** → chọn format **JSON**.
+4. Copy toàn bộ nội dung JSON.
+5. Tạo file `messenger-bot/fb_cookies.json` trong Replit Shell:
+   ```bash
+   nano messenger-bot/fb_cookies.json
+   ```
+   Paste nội dung JSON vào → Ctrl+X → Y → Enter.
+
+> **Lưu ý:** File `fb_cookies.json` phải ở trong thư mục `messenger-bot/`.  
+> Cookies thường hết hạn sau 30–90 ngày, cần export lại khi bot bị lỗi đăng nhập.
+
+---
+
+## BƯỚC 2 — Điền Secrets trong Replit
+
+| Secret           | Giá trị                                              |
+|------------------|------------------------------------------------------|
+| `DISCORD_WEBHOOK`| URL Webhook Discord (Channel Settings → Integrations → Webhooks) |
+| `FB_THREAD_ID`   | ID nhóm chat Messenger (xem hướng dẫn bên dưới)      |
+
+### Cách lấy `FB_THREAD_ID`:
 1. Mở Facebook trên trình duyệt → vào nhóm chat lớp.
-2. Nhìn URL dạng: `https://www.facebook.com/messages/t/123456789`
+2. URL dạng: `https://www.facebook.com/messages/t/123456789`
 3. Số `123456789` chính là `FB_THREAD_ID`.
 
-### Cách lấy Discord Webhook URL
-
+### Cách lấy Discord Webhook URL:
 1. Vào kênh Discord muốn nhận tin → **Edit Channel** → **Integrations** → **Webhooks**.
 2. Tạo webhook mới → **Copy Webhook URL**.
 
-## Chạy bot
+---
+
+## BƯỚC 3 — Chạy bot
+
+Sau khi có `fb_cookies.json` và điền Secrets xong:
 
 ```bash
-cd messenger-bot
-pip install -r requirements.txt
-python bot.py
+# Kiểm tra cookies hợp lệ trước
+python3 messenger-bot/check_cookies.py
+
+# Chạy bot (hoặc dùng workflow "Messenger Bot" trong Replit)
+python3 messenger-bot/bot.py
 ```
 
-Trên Replit: workflow **"Messenger Bot"** tự động cài deps và chạy bot.
+---
 
-## Lưu ý quan trọng
+## Logs
 
-- Tài khoản Facebook bot **dễ bị checkpoint** (yêu cầu xác minh) nếu đăng nhập từ IP mới.  
-  → Nên đăng nhập thủ công một lần trên Replit Shell trước: `python -c "import fbchat; fbchat.Client('email', 'pass')"`.
-- Nếu bị checkpoint, Facebook sẽ yêu cầu xác minh qua email/SMS — cần xử lý thủ công.
-- `fbchat-muqit` sử dụng cookie session; sau lần đăng nhập đầu, bot hoạt động ổn định hơn.
-- Chỉ nên dùng **tài khoản phụ** (bot account), không dùng tài khoản chính.
+Bot log rõ ràng ra console:
+```
+✅  Logged in — UID: xxx | Name: Tên Bot
+🎯  Watching thread: 24410875481904121
+📡  Listening for messages… (Ctrl+C to stop)
+📩  [Nguyen Van A]: Ơi mọi người ơi…
+✅  Forwarded [Nguyen Van A]: Ơi mọi người ơi…
+```
+
+---
+
+## Xử lý sự cố
+
+| Lỗi                              | Nguyên nhân                        | Cách fix                              |
+|----------------------------------|------------------------------------|---------------------------------------|
+| `Cookie file not found`          | Chưa tạo `fb_cookies.json`         | Làm BƯỚC 1                            |
+| `AuthenticationError`            | Cookies hết hạn hoặc sai           | Export cookies mới                    |
+| `SessionExpiredError`            | Session bị Facebook thu hồi       | Export cookies mới, đổi IP nếu cần   |
+| Bot không nhận được tin nhắn     | Sai `FB_THREAD_ID`                 | Kiểm tra lại ID trong URL             |
+| Bot forward tin của chính mình   | Không xảy ra — đã lọc             | —                                     |

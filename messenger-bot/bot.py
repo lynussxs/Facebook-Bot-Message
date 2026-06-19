@@ -1,3 +1,8 @@
+"""
+Messenger → Discord Forwarder Bot
+Dùng fbchat-muqit (async) + Discord Webhook
+"""
+
 import asyncio
 import logging
 import os
@@ -12,14 +17,11 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-FB_EMAIL = os.getenv("FB_EMAIL")
-FB_PASSWORD = os.getenv("FB_PASSWORD")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 FB_THREAD_ID = os.getenv("FB_THREAD_ID")
+COOKIES_FILE = os.path.join(os.path.dirname(__file__), "fb_cookies.json")
 
 missing = [k for k, v in {
-    "FB_EMAIL": FB_EMAIL,
-    "FB_PASSWORD": FB_PASSWORD,
     "DISCORD_WEBHOOK": DISCORD_WEBHOOK,
     "FB_THREAD_ID": FB_THREAD_ID,
 }.items() if not v]
@@ -38,11 +40,11 @@ logger = logging.getLogger("messenger-bot")
 # ---------------------------------------------------------------------------
 # Discord helper
 # ---------------------------------------------------------------------------
-DISCORD_COLOR = 0x5865F2  # blurple
+DISCORD_COLOR = 0x5865F2  # Discord blurple
 
 
 def send_discord(sender_name: str, text: str, dt: datetime) -> None:
-    """Forward a single message to the Discord webhook as an embed."""
+    """Forward a message to the Discord webhook as a rich embed."""
     time_str = dt.strftime("%H:%M  %d/%m/%Y")
     payload = {
         "embeds": [
@@ -58,59 +60,72 @@ def send_discord(sender_name: str, text: str, dt: datetime) -> None:
         resp = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
         resp.raise_for_status()
         preview = text[:60] + ("…" if len(text) > 60 else "")
-        logger.info(f"✅  Forwarded  [{sender_name}]: {preview}")
+        logger.info(f"✅  Forwarded [{sender_name}]: {preview}")
     except requests.RequestException as exc:
         logger.error(f"❌  Discord send failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
-# Messenger bot (fbchat-muqit)
+# Messenger Bot class — proper fbchat_muqit async API
 # ---------------------------------------------------------------------------
 
-def build_listener_class():
-    """
-    Dynamically create the listener subclass *after* fbchat is imported.
-    This keeps the import error contained to run_bot().
-    """
-    import fbchat  # noqa: PLC0415
+class MessengerForwarder:
+    """Wrapper that creates a fbchat_muqit.Client, registers event handlers, and runs."""
 
-    class MessengerBot(fbchat.Client):
-        def onMessage(
-            self,
-            author_id,
-            message_object,
-            thread_id,
-            thread_type,
-            **kwargs,
-        ):
-            # Only handle the target group thread
-            if str(thread_id) != str(FB_THREAD_ID):
+    def __init__(self):
+        import fbchat_muqit as fbchat
+        self._fbchat = fbchat
+        self.client = fbchat.Client(cookies_file_path=COOKIES_FILE)
+        self._own_uid: str = ""
+        self._register_handlers()
+
+    def _register_handlers(self):
+        fbchat = self._fbchat
+        client = self.client
+
+        @client.event(fbchat.EventType.MESSAGE)
+        async def on_message(event_data: fbchat.Message):
+            await self._handle_message(event_data)
+
+        @client.event(fbchat.EventType.DISCONNECT)
+        async def on_disconnect():
+            logger.warning("⚠️   Disconnected from Messenger MQTT")
+
+        @client.event(fbchat.EventType.RECONNECT)
+        async def on_reconnect():
+            logger.info("🔄  Reconnected to Messenger MQTT")
+
+    async def _handle_message(self, event_data) -> None:
+        try:
+            thread_id = str(getattr(event_data, "thread_id", ""))
+            sender_id = str(getattr(event_data, "sender_id", ""))
+
+            # Only handle the target thread
+            if thread_id != str(FB_THREAD_ID):
                 return
 
             # Skip own messages
-            if str(author_id) == str(self.uid):
+            if sender_id and sender_id == self._own_uid:
                 return
 
-            # Resolve sender name
-            try:
-                info = self.fetchUserInfo(author_id)
-                user = info.get(str(author_id))
-                if user:
-                    sender_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-                else:
-                    sender_name = f"UID {author_id}"
-            except Exception:
-                sender_name = f"UID {author_id}"
-
             # Text content
-            text = message_object.text or "[Sticker / Media / File]"
+            text = getattr(event_data, "text", None) or "[Sticker / Media / File]"
 
-            # Timestamp (fbchat returns ms since epoch)
-            raw_ts = getattr(message_object, "timestamp", None)
+            # Sender name — use mention name if available, else UID
+            sender_name = sender_id
+            mentions = getattr(event_data, "mentions", None)
+            if mentions and hasattr(mentions, "users") and mentions.users:
+                for m in mentions.users:
+                    if str(getattr(m, "user_id", "")) == sender_id and m.name:
+                        sender_name = m.name
+                        break
+
+            # Timestamp
+            raw_ts = getattr(event_data, "timestamp", None)
             if raw_ts:
                 try:
                     dt = datetime.fromtimestamp(int(raw_ts) / 1000)
-                except (ValueError, OSError):
+                except (ValueError, OSError, TypeError):
                     dt = datetime.now()
             else:
                 dt = datetime.now()
@@ -118,75 +133,53 @@ def build_listener_class():
             logger.info(f"📩  [{sender_name}]: {text[:80]}")
             send_discord(sender_name, text, dt)
 
-        def onConnectionError(self, exception, **kwargs):
-            logger.warning(f"⚠️   Connection error: {exception}")
+        except Exception as exc:
+            logger.error(f"❌  Error handling message: {exc}", exc_info=True)
 
-        def onLoggedOut(self, reason, **kwargs):
-            logger.warning(f"⚠️   Logged out — reason: {reason}")
-
-    return MessengerBot
-
-
-def run_bot() -> None:
-    """
-    Login to Facebook and start long-polling.
-    Raises on unrecoverable errors so the outer retry loop can restart.
-    """
-    import fbchat  # noqa: PLC0415
-
-    BotClass = build_listener_class()
-
-    logger.info("🔑  Logging in to Facebook…")
-    try:
-        bot = BotClass(FB_EMAIL, FB_PASSWORD)
-    except fbchat.FBchatUserError as exc:
-        logger.error(f"❌  Login failed (check credentials / checkpoint): {exc}")
-        raise
-    except fbchat.FBchatException as exc:
-        logger.error(f"❌  Facebook error during login: {exc}")
-        raise
-
-    logger.info(f"✅  Logged in — UID: {bot.uid}")
-    logger.info(f"🎯  Watching thread: {FB_THREAD_ID}")
-    logger.info("📡  Listening for messages… (Ctrl+C to stop)")
-
-    try:
-        bot.listen()
-    finally:
-        try:
-            bot.logout()
-        except Exception:
-            pass
+    async def run(self) -> None:
+        async with self.client as c:
+            self._own_uid = c.uid
+            logger.info(f"✅  Logged in — UID: {c.uid} | Name: {c.name}")
+            logger.info(f"🎯  Watching thread: {FB_THREAD_ID}")
+            logger.info("📡  Listening for messages… (Ctrl+C to stop)")
+            await c.listen()
 
 
 # ---------------------------------------------------------------------------
-# Async main with exponential-backoff retry
+# Main loop with exponential-backoff retry
 # ---------------------------------------------------------------------------
-INITIAL_RETRY_DELAY = 15   # seconds
-MAX_RETRY_DELAY = 300      # 5 minutes cap
+INITIAL_RETRY_DELAY = 20
+MAX_RETRY_DELAY = 300
 
 
 async def main() -> None:
     if missing:
         logger.error(f"Missing env vars: {', '.join(missing)}")
-        logger.error("Set them in the Replit Secrets panel and restart the workflow.")
         sys.exit(1)
 
-    loop = asyncio.get_event_loop()
+    if not os.path.isfile(COOKIES_FILE):
+        logger.error(
+            f"❌  Cookie file not found: {COOKIES_FILE}\n"
+            "    Follow the README to export your Facebook cookies first."
+        )
+        sys.exit(1)
+
     retry_delay = INITIAL_RETRY_DELAY
 
     while True:
         try:
             logger.info("🚀  Starting Messenger → Discord bot…")
-            # run_bot() is blocking — offload to a thread executor
-            await loop.run_in_executor(None, run_bot)
-            # If listen() returns cleanly, restart immediately
-            logger.warning("🔄  Listener exited — restarting…")
+            bot = MessengerForwarder()
+            await bot.run()
+            logger.warning("🔄  Listener returned — restarting immediately…")
             retry_delay = INITIAL_RETRY_DELAY
 
         except KeyboardInterrupt:
             logger.info("🛑  Stopped by user.")
             break
+
+        except SystemExit:
+            raise
 
         except Exception as exc:
             logger.error(f"💥  Bot crashed: {exc}")
