@@ -34,7 +34,7 @@ missing = [k for k, v in {
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S %d/%m/%Y",
     handlers=[logging.StreamHandler(sys.stdout)],
@@ -192,36 +192,49 @@ class MessengerForwarder:
             StickerAttachment, AudioAttachment, FileAttachment,
         )
 
+        def _ensure_ext(name: str, ext: str) -> str:
+            """Make sure filename ends with the given extension (e.g. '.gif')."""
+            return name if name.lower().endswith(ext) else name + ext
+
         raw = getattr(event_data, "attachments", None) or []
         result = []
         for att in raw:
             if att is None:
                 continue
             try:
+                logger.debug(f"Attachment type: {type(att).__name__}  fields: {vars(att) if hasattr(att, '__dict__') else att}")
+
                 if isinstance(att, ImageAttachment):
                     url = att.large_preview.url or att.thumbnail.url
-                    result.append((url, att.filename or "image.jpg", "📷 [Hình ảnh]"))
+                    fname = _ensure_ext(att.filename or "image", ".jpg")
+                    result.append((url, fname, "📷 [Hình ảnh]"))
 
                 elif isinstance(att, VideoAttachment):
-                    result.append((att.playable_url, att.filename or "video.mp4", "🎥 [Video]"))
+                    fname = _ensure_ext(att.filename or "video", ".mp4")
+                    result.append((att.playable_url, fname, "🎥 [Video]"))
 
                 elif isinstance(att, GifAttachment):
-                    result.append((att.animated_image.url, att.filename or "animation.gif", "🎞️ [GIF]"))
+                    # GIF from Messenger: att.filename usually has no extension
+                    url = att.animated_image.url
+                    fname = _ensure_ext(att.filename or "animation", ".gif")
+                    result.append((url, fname, "🎞️ [GIF]"))
 
                 elif isinstance(att, StickerAttachment):
                     result.append((att.url, "sticker.webp", "😄 [Sticker]"))
 
                 elif isinstance(att, AudioAttachment):
-                    result.append((att.playable_url, att.filename or "audio.mp3", "🎵 [Audio]"))
+                    fname = _ensure_ext(att.filename or "audio", ".mp3")
+                    result.append((att.playable_url, fname, "🎵 [Audio]"))
 
                 elif isinstance(att, FileAttachment):
-                    result.append((att.download_url or "", att.filename if hasattr(att, "filename") and att.filename else "file", "📎 [File]"))
+                    fname = att.filename if (hasattr(att, "filename") and att.filename) else "file"
+                    result.append((att.download_url or "", fname, "📎 [File]"))
 
                 else:
-                    result.append(("", "", "📎 [Media]"))
+                    logger.debug(f"Unknown attachment type skipped: {type(att).__name__}")
+
             except Exception as exc:
-                logger.debug(f"Could not extract attachment: {exc}")
-                result.append(("", "", "📎 [Media]"))
+                logger.debug(f"Could not extract attachment {type(att).__name__}: {exc}")
         return result
 
     async def _handle_message(self, event_data) -> None:
