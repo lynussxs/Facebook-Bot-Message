@@ -42,14 +42,23 @@ logger = logging.getLogger("messenger-bot")
 # ---------------------------------------------------------------------------
 DISCORD_COLOR = 0x5865F2  # Discord blurple
 
+# Public Facebook Graph URL for profile pictures — no auth needed, returns redirect to CDN
+def fb_avatar_url(uid: str) -> str:
+    return f"https://graph.facebook.com/{uid}/picture?type=normal&width=128&height=128"
 
-def send_discord(sender_name: str, text: str, dt: datetime) -> None:
-    """Forward a message to the Discord webhook as a rich embed."""
+
+def send_discord(sender_name: str, text: str, dt: datetime, avatar_url: str = "") -> None:
+    """Forward a message to the Discord webhook as a rich embed with avatar."""
     time_str = dt.strftime("%H:%M  %d/%m/%Y")
+
+    author: dict = {"name": sender_name}
+    if avatar_url:
+        author["icon_url"] = avatar_url
+
     payload = {
         "embeds": [
             {
-                "author": {"name": sender_name},
+                "author": author,
                 "description": text,
                 "footer": {"text": f"🕐 {time_str}  •  Messenger"},
                 "color": DISCORD_COLOR,
@@ -77,6 +86,8 @@ class MessengerForwarder:
         self._fbchat = fbchat
         self.client = fbchat.Client(cookies_file_path=COOKIES_FILE)
         self._own_uid: str = ""
+        # Cache: uid → (name, avatar_url) to avoid repeated API calls
+        self._user_cache: dict[str, tuple[str, str]] = {}
         self._register_handlers()
 
     def _register_handlers(self):
@@ -95,6 +106,40 @@ class MessengerForwarder:
         async def on_reconnect():
             logger.info("🔄  Reconnected to Messenger MQTT")
 
+    async def _resolve_user(self, sender_id: str) -> tuple[str, str]:
+        """Return (display_name, avatar_url) for a sender UID.
+
+        Tries fbchat_muqit fetchUserInfo first; always falls back to
+        graph.facebook.com for the avatar so the icon is never missing.
+        Results are cached per session.
+        """
+        if sender_id in self._user_cache:
+            return self._user_cache[sender_id]
+
+        name = sender_id          # fallback
+        avatar = fb_avatar_url(sender_id)   # always works as a redirect
+
+        try:
+            # fetchUserInfo is a coroutine in fbchat_muqit
+            info = await self.client.fetchUserInfo(sender_id)
+            user = (info or {}).get(sender_id)
+            if user:
+                first = getattr(user, "first_name", "") or ""
+                last = getattr(user, "last_name", "") or ""
+                full = f"{first} {last}".strip()
+                if full:
+                    name = full
+                # Some versions expose profile_picture_url
+                pic = getattr(user, "profile_picture_url", None) or \
+                      getattr(user, "picture", None)
+                if pic:
+                    avatar = str(pic)
+        except Exception as exc:
+            logger.debug(f"fetchUserInfo failed for {sender_id}: {exc} — using fallback")
+
+        self._user_cache[sender_id] = (name, avatar)
+        return name, avatar
+
     async def _handle_message(self, event_data) -> None:
         try:
             thread_id = str(getattr(event_data, "thread_id", ""))
@@ -111,14 +156,8 @@ class MessengerForwarder:
             # Text content
             text = getattr(event_data, "text", None) or "[Sticker / Media / File]"
 
-            # Sender name — use mention name if available, else UID
-            sender_name = sender_id
-            mentions = getattr(event_data, "mentions", None)
-            if mentions and hasattr(mentions, "users") and mentions.users:
-                for m in mentions.users:
-                    if str(getattr(m, "user_id", "")) == sender_id and m.name:
-                        sender_name = m.name
-                        break
+            # Sender name + avatar (cached after first lookup)
+            sender_name, avatar_url = await self._resolve_user(sender_id)
 
             # Timestamp
             raw_ts = getattr(event_data, "timestamp", None)
@@ -131,7 +170,7 @@ class MessengerForwarder:
                 dt = datetime.now()
 
             logger.info(f"📩  [{sender_name}]: {text[:80]}")
-            send_discord(sender_name, text, dt)
+            send_discord(sender_name, text, dt, avatar_url)
 
         except Exception as exc:
             logger.error(f"❌  Error handling message: {exc}", exc_info=True)
