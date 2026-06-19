@@ -5,6 +5,9 @@
     },
     "install": {
       "cmds": ["pip install -r messenger-bot/requirements.txt --break-system-packages"]
+    },
+    "build": {
+      "cmds": ["echo 'Skipping build phase for Python'"]
     }
   },
   "start": {
