@@ -4,6 +4,7 @@ Dùng fbchat-muqit (async) + Discord Webhook
 """
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -49,19 +50,73 @@ def fb_avatar_url(uid: str) -> str:
     return f"https://graph.facebook.com/{uid}/picture?type=normal&width=128&height=128"
 
 
-def send_discord(sender_name: str, text: str, dt: datetime, avatar_url: str = "") -> None:
-    """Forward a message using webhook impersonation — shows as if sender wrote it directly."""
-    time_str = dt.strftime("%H:%M  %d/%m/%Y")
+def _download(url: str) -> bytes | None:
+    """Download a URL and return bytes, or None on failure."""
+    try:
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        return r.content
+    except Exception as exc:
+        logger.debug(f"Download failed ({url[:60]}…): {exc}")
+        return None
 
-    payload = {
+
+def send_discord(
+    sender_name: str,
+    text: str,
+    dt: datetime,
+    avatar_url: str = "",
+    attachments: list[tuple[str, str, str]] | None = None,
+) -> None:
+    """Forward a message using webhook impersonation.
+
+    attachments: list of (url, filename, fallback_label)
+      - url       → direct link to download the file
+      - filename  → name sent to Discord (e.g. "photo.jpg")
+      - fallback  → text shown if download fails (e.g. "📷 [Hình ảnh]")
+    """
+    time_str = dt.strftime("%H:%M  %d/%m/%Y")
+    footer = f"-# 🕐 {time_str}  •  Messenger"
+
+    base_payload: dict = {
         "username": sender_name,
         "avatar_url": avatar_url or fb_avatar_url("0"),
-        "content": f"{text}\n-# 🕐 {time_str}  •  Messenger",
     }
+
+    # --- Build file list ---
+    files: dict = {}
+    failed_labels: list[str] = []
+
+    for i, (url, filename, label) in enumerate(attachments or []):
+        data = _download(url) if url else None
+        if data:
+            files[f"files[{i}]"] = (filename, data)
+        else:
+            failed_labels.append(label)
+
+    # Content = text + any failed-download labels + footer
+    content_parts: list[str] = []
+    if text:
+        content_parts.append(text)
+    if failed_labels:
+        content_parts.append("  ".join(failed_labels))
+    content_parts.append(footer)
+    base_payload["content"] = "\n".join(content_parts)
+
     try:
-        resp = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
+        if files:
+            # multipart: payload_json + file(s)
+            resp = requests.post(
+                DISCORD_WEBHOOK,
+                data={"payload_json": json.dumps(base_payload)},
+                files=files,
+                timeout=30,
+            )
+        else:
+            resp = requests.post(DISCORD_WEBHOOK, json=base_payload, timeout=10)
+
         resp.raise_for_status()
-        preview = text[:60] + ("…" if len(text) > 60 else "")
+        preview = (text or str(attachments))[:60]
         logger.info(f"✅  Forwarded [{sender_name}]: {preview}")
     except requests.RequestException as exc:
         logger.error(f"❌  Discord send failed: {exc}")
@@ -129,6 +184,46 @@ class MessengerForwarder:
         self._user_cache[sender_id] = (name, avatar)
         return name, avatar
 
+    @staticmethod
+    def _extract_attachments(event_data) -> list[tuple[str, str, str]]:
+        """Return list of (download_url, filename, fallback_label) for each attachment."""
+        from fbchat_muqit.models.attachment import (
+            ImageAttachment, VideoAttachment, GifAttachment,
+            StickerAttachment, AudioAttachment, FileAttachment,
+        )
+
+        raw = getattr(event_data, "attachments", None) or []
+        result = []
+        for att in raw:
+            if att is None:
+                continue
+            try:
+                if isinstance(att, ImageAttachment):
+                    url = att.large_preview.url or att.thumbnail.url
+                    result.append((url, att.filename or "image.jpg", "📷 [Hình ảnh]"))
+
+                elif isinstance(att, VideoAttachment):
+                    result.append((att.playable_url, att.filename or "video.mp4", "🎥 [Video]"))
+
+                elif isinstance(att, GifAttachment):
+                    result.append((att.animated_image.url, att.filename or "animation.gif", "🎞️ [GIF]"))
+
+                elif isinstance(att, StickerAttachment):
+                    result.append((att.url, "sticker.webp", "😄 [Sticker]"))
+
+                elif isinstance(att, AudioAttachment):
+                    result.append((att.playable_url, att.filename or "audio.mp3", "🎵 [Audio]"))
+
+                elif isinstance(att, FileAttachment):
+                    result.append((att.download_url or "", att.filename if hasattr(att, "filename") and att.filename else "file", "📎 [File]"))
+
+                else:
+                    result.append(("", "", "📎 [Media]"))
+            except Exception as exc:
+                logger.debug(f"Could not extract attachment: {exc}")
+                result.append(("", "", "📎 [Media]"))
+        return result
+
     async def _handle_message(self, event_data) -> None:
         try:
             thread_id = str(getattr(event_data, "thread_id", ""))
@@ -142,8 +237,15 @@ class MessengerForwarder:
             if sender_id and sender_id == self._own_uid:
                 return
 
-            # Text content
-            text = getattr(event_data, "text", None) or "[Sticker / Media / File]"
+            # Text content (empty string if none — attachments may carry the content)
+            text = getattr(event_data, "text", None) or ""
+
+            # Attachments (images, videos, stickers, etc.)
+            attachments = self._extract_attachments(event_data)
+
+            # If nothing at all, skip silently
+            if not text and not attachments:
+                return
 
             # Sender name + avatar (cached after first lookup)
             sender_name, avatar_url = await self._resolve_user(sender_id)
@@ -158,8 +260,9 @@ class MessengerForwarder:
             else:
                 dt = datetime.now(tz=VN_TZ)
 
-            logger.info(f"📩  [{sender_name}]: {text[:80]}")
-            send_discord(sender_name, text, dt, avatar_url)
+            log_preview = text[:60] or f"{len(attachments)} attachment(s)"
+            logger.info(f"📩  [{sender_name}]: {log_preview}")
+            send_discord(sender_name, text, dt, avatar_url, attachments or None)
 
         except Exception as exc:
             logger.error(f"❌  Error handling message: {exc}", exc_info=True)
