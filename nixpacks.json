@@ -4,7 +4,7 @@
       "nixPkgs": ["python3", "python3Packages.pip", "gcc"]
     },
     "install": {
-      "cmds": ["pip install -r messenger-bot/requirements.txt"]
+      "cmds": ["pip install -r messenger-bot/requirements.txt --break-system-packages"]
     }
   },
   "start": {
