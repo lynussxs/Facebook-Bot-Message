@@ -8,6 +8,9 @@ import logging
 import os
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 import requests
 from dotenv import load_dotenv
@@ -40,7 +43,6 @@ logger = logging.getLogger("messenger-bot")
 # ---------------------------------------------------------------------------
 # Discord helper
 # ---------------------------------------------------------------------------
-DISCORD_COLOR = 0x5865F2  # Discord blurple
 
 # Public Facebook Graph URL for profile pictures — no auth needed, returns redirect to CDN
 def fb_avatar_url(uid: str) -> str:
@@ -48,22 +50,13 @@ def fb_avatar_url(uid: str) -> str:
 
 
 def send_discord(sender_name: str, text: str, dt: datetime, avatar_url: str = "") -> None:
-    """Forward a message to the Discord webhook as a rich embed with avatar."""
+    """Forward a message using webhook impersonation — shows as if sender wrote it directly."""
     time_str = dt.strftime("%H:%M  %d/%m/%Y")
 
-    author: dict = {"name": sender_name}
-    if avatar_url:
-        author["icon_url"] = avatar_url
-
     payload = {
-        "embeds": [
-            {
-                "author": author,
-                "description": text,
-                "footer": {"text": f"🕐 {time_str}  •  Messenger"},
-                "color": DISCORD_COLOR,
-            }
-        ]
+        "username": sender_name,
+        "avatar_url": avatar_url or fb_avatar_url("0"),
+        "content": f"{text}\n-# 🕐 {time_str}  •  Messenger",
     }
     try:
         resp = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
@@ -155,15 +148,15 @@ class MessengerForwarder:
             # Sender name + avatar (cached after first lookup)
             sender_name, avatar_url = await self._resolve_user(sender_id)
 
-            # Timestamp
+            # Timestamp — convert to VN timezone (UTC+7)
             raw_ts = getattr(event_data, "timestamp", None)
             if raw_ts:
                 try:
-                    dt = datetime.fromtimestamp(int(raw_ts) / 1000)
+                    dt = datetime.fromtimestamp(int(raw_ts) / 1000, tz=VN_TZ)
                 except (ValueError, OSError, TypeError):
-                    dt = datetime.now()
+                    dt = datetime.now(tz=VN_TZ)
             else:
-                dt = datetime.now()
+                dt = datetime.now(tz=VN_TZ)
 
             logger.info(f"📩  [{sender_name}]: {text[:80]}")
             send_discord(sender_name, text, dt, avatar_url)
