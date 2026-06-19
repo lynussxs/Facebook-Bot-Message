@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -15,8 +16,28 @@ VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 import requests
 from dotenv import load_dotenv
+from flask import Flask
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Web Server (Flask) — keeps Railway happy, serves health-check endpoint
+# ---------------------------------------------------------------------------
+_flask_app = Flask(__name__)
+
+@_flask_app.get("/")
+def _index():
+    return "Facebook Bot is Running", 200
+
+@_flask_app.get("/health")
+def _health():
+    return {"status": "ok"}, 200
+
+def _start_web_server() -> None:
+    port = int(os.environ.get("PORT", 3000))
+    log = logging.getLogger("werkzeug")
+    log.setLevel(logging.ERROR)          # silence Flask access logs
+    _flask_app.run(host="0.0.0.0", port=port)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -307,6 +328,11 @@ async def main() -> None:
             "    Follow the README to export your Facebook cookies first."
         )
         sys.exit(1)
+
+    # Start HTTP server in background thread so Railway sees an open port
+    web_thread = threading.Thread(target=_start_web_server, daemon=True)
+    web_thread.start()
+    logger.info(f"🌐  Web server started on port {os.environ.get('PORT', 3000)}")
 
     retry_delay = INITIAL_RETRY_DELAY
 
