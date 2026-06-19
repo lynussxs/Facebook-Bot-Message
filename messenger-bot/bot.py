@@ -120,22 +120,18 @@ class MessengerForwarder:
         avatar = fb_avatar_url(sender_id)   # always works as a redirect
 
         try:
-            # fetchUserInfo is a coroutine in fbchat_muqit
-            info = await self.client.fetchUserInfo(sender_id)
+            # fetch_user_info returns Dict[str, User]
+            info = await self.client.fetch_user_info(sender_id)
             user = (info or {}).get(sender_id)
             if user:
-                first = getattr(user, "first_name", "") or ""
-                last = getattr(user, "last_name", "") or ""
-                full = f"{first} {last}".strip()
-                if full:
-                    name = full
-                # Some versions expose profile_picture_url
-                pic = getattr(user, "profile_picture_url", None) or \
-                      getattr(user, "picture", None)
-                if pic:
-                    avatar = str(pic)
+                # user.name is the full display name on Facebook
+                if getattr(user, "name", ""):
+                    name = user.name
+                # user.image is Value (subclass of str) → the big profile picture URL
+                if getattr(user, "image", None):
+                    avatar = str(user.image)
         except Exception as exc:
-            logger.debug(f"fetchUserInfo failed for {sender_id}: {exc} — using fallback")
+            logger.debug(f"fetch_user_info failed for {sender_id}: {exc} — using Graph API fallback")
 
         self._user_cache[sender_id] = (name, avatar)
         return name, avatar
